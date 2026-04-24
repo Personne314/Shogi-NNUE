@@ -365,7 +365,7 @@ public:
 	consteval DirectionLUT(const Square square) noexcept
 	{
 		const uint8_t l = square/9;
-		const uint8_t c = 8-(square%9);
+		const uint8_t c = square%9;
 		
 		const uint8_t ur = std::min(l, c);
 		const uint8_t ul = std::min(l, static_cast<uint8_t>(8-c));
@@ -722,12 +722,12 @@ public:
 
 private:
 
-	Board m_board{Pieces::NONE};   // The actual board content. 
-	Hand m_hands[2]{0};            // Both player hands.
-	std::bitset<BOARD_SQUARES> m_free{};      // Bitset to store the free squares ids.
-	std::bitset<9> m_sente_pawn{}; // Bitset to get the columns where there is a sente pawn.
-	std::bitset<9> m_gote_pawn{};  // Bitset to get the columns where there is a gote pawn.
-	int32_t m_king_sq[2]{-1, -1};
+	Board m_board{Pieces::NONE};         // The actual board content. 
+	Hand m_hands[2]{ {0}, {0} };         // Both player hands.
+	std::bitset<BOARD_SQUARES> m_free{}; // Bitset to store the free squares ids.
+	std::bitset<9> m_sente_pawn{};       // Bitset to get the columns where there is a sente pawn.
+	std::bitset<9> m_gote_pawn{};        // Bitset to get the columns where there is a gote pawn.
+	int32_t m_king_sq[2]{-1, -1};        // Positions of both player kings.
 
 };
 

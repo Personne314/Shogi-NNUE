@@ -16,7 +16,10 @@
 
 
 
+#include "nnue.hpp"
+#include "train.hpp"
 #include <iostream>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -57,6 +60,17 @@ int main()
 			std::cout << "\tVersion      : " << device_version << "\n\n";
 		}
 	}
+
+
+
+
+
+	std::unique_ptr<NNUE::NNUE> network = std::make_unique<NNUE::NNUE>();
+	Train::add_training_data("./dataset.bin", *network, 100);
+
+
+
+
 
 	return 0;
 }

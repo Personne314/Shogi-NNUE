@@ -411,7 +411,7 @@ inline void generate_moves(const Shogi::State &state, Shogi::Player player, Move
 			for (int32_t step = 0; step < 8; ++step)
 			{
 				if (!valid_dirs.test(RAY_STARTS[r] + step)) break;
-				const int to = sq + offset * (step + 1);
+				const int32_t to = sq + offset * (step + 1);
 				const uint8_t to_raw = board[to].raw();
 
 				// While we find an empty square, add a movement.

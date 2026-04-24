@@ -93,7 +93,7 @@ inline int32_t alpha_beta(
 	Shogi::Player player, 
 	Shogi::Move prev
 ) {
-	if (depth == 0) {
+	if (depth <= 0) {
 		return evaluate(network, acc, player);
 	}
 

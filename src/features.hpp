@@ -227,12 +227,14 @@ inline void update_accumulator(
 	if (captured_piece.piece() != Shogi::PieceType::UNKNOWN) {
 		apply_change(captured_piece, to, false);
 		Shogi::PieceType base_captured = captured_piece.piece();
-		if (base_captured > Shogi::PieceType::K) {
-			base_captured = static_cast<Shogi::PieceType>(base_captured - 8); 
+		if (base_captured != Shogi::PieceType::K) {
+			if (base_captured > Shogi::PieceType::K) {
+				base_captured = static_cast<Shogi::PieceType>(base_captured - 8); 
+			}
+			int32_t old_hand_count = state.hands(player)[base_captured];
+			apply_hand_change(player, base_captured, old_hand_count, false);
+			apply_hand_change(player, base_captured, old_hand_count + 1, true);
 		}
-		int32_t old_hand_count = state.hands(player)[base_captured];
-		apply_hand_change(player, base_captured, old_hand_count, false);    // Enlever l'ancien compte
-		apply_hand_change(player, base_captured, old_hand_count + 1, true); // Ajouter le nouveau compte
 	}
 
 }
