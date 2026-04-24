@@ -1,9 +1,12 @@
 #pragma once
 
+#define CL_HPP_TARGET_OPENCL_VERSION 200
+#include <CL/opencl.hpp>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
+#include "adam.hpp"
 #include "engine.hpp"
 #include "features.hpp"
 #include "shogi.hpp"
@@ -122,7 +125,7 @@ inline int32_t generate_selfplay_game(const NNUE::NNUE &network, std::ofstream &
     Shogi::Player current_player = Shogi::Player::SENTE;
     int32_t current_turn = 0;
     bool is_draw = false;
-    Shogi::Player winner;
+    Shogi::Player winner = Engine::OPPONENT[Shogi::Player::SENTE];;
     while (current_turn < 256) {
         
 		// Save the current state features.
@@ -223,5 +226,159 @@ inline void add_training_data(const std::string &path, const NNUE::NNUE &network
 	file.close();
 	std::cout << "Dataset updated: " << total_games << " games, " << total_examples << " examples." << std::endl;
 }
+
+/**
+ * @brief Load a dataset from a binary file.
+ * @param path The path of the dataset.
+ * @param dataset The dataset buffer.
+ */
+inline void load_dataset(const std::string &path, std::vector<TrainingData> &dataset)
+{
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open()) {
+		std::cerr << "Error: Failed to read the dataset '" << path << "'\n";
+		exit(1);
+	}
+	int32_t total_examples = 0;
+	int32_t total_games = 0;
+	file.read(reinterpret_cast<char*>(&total_examples), sizeof(int32_t));
+	file.read(reinterpret_cast<char*>(&total_games), sizeof(int32_t));
+	std::cout << "Loading " << total_examples << " examples from " << total_games << " games.\n";
+	dataset.resize(total_examples);
+	file.read(reinterpret_cast<char*>(dataset.data()), total_examples * sizeof(TrainingData));
+	file.close();
+}
+
+
+
+/**
+ * @class Trainer
+ * @brief Used to perform forward and backward pass during training.
+ */ 
+class Trainer
+{
+private:
+	cl::Context context;
+	cl::CommandQueue queue;
+	cl::Program program;
+	cl::Kernel quantize_kernel;
+	cl::Kernel train_kernel;
+
+	cl::Buffer d_batch;
+	cl::Buffer d_q_weights;
+	cl::Buffer d_loss;
+	
+	int32_t batch_capacity;
+	int32_t total_params;
+
+	int32_t off_in_w, off_in_b;
+	int32_t off_fc1_w, off_fc1_b;
+	int32_t off_fc2_w, off_fc2_b;
+	int32_t off_out_w, off_out_b;
+
+public:
+	Trainer(cl::Context ctx, cl::Device device, cl::CommandQueue q, int32_t max_batch_size)
+	{
+		context = ctx;
+		queue = q;
+		batch_capacity = max_batch_size;
+		total_params = sizeof(NNUE::NNUEFloat) / sizeof(float);
+
+		// Forward/Backward kernel compilation
+		std::ifstream file("nnue.cl");
+		if (!file.is_open()) {
+			std::cerr << "Error: Failed to open 'nnue.cl'\n";
+			exit(1);
+		}
+		std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		cl::Program::Sources sources;
+		sources.push_back({source.c_str(), source.length()});
+		
+		program = cl::Program(context, sources);
+		if (program.build({device}) != CL_SUCCESS) {
+			std::cerr << "Error:\n" << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << "\n";
+			exit(1);
+		}
+		
+		quantize_kernel = cl::Kernel(program, "quantize_weights");
+		train_kernel = cl::Kernel(program, "forward_backward");
+
+		d_batch = cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(TrainingData) * batch_capacity);
+		d_q_weights = cl::Buffer(context, CL_MEM_READ_WRITE, total_params * sizeof(int32_t));
+		d_loss = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(float));
+
+		off_in_w  = offsetof(NNUE::NNUEFloat, in_weights) / sizeof(float);
+		off_in_b  = offsetof(NNUE::NNUEFloat, in_bias) / sizeof(float);
+		off_fc1_w = offsetof(NNUE::NNUEFloat, fc1_weights) / sizeof(float);
+		off_fc1_b = offsetof(NNUE::NNUEFloat, fc1_bias) / sizeof(float);
+		off_fc2_w = offsetof(NNUE::NNUEFloat, fc2_weights) / sizeof(float);
+		off_fc2_b = offsetof(NNUE::NNUEFloat, fc2_bias) / sizeof(float);
+		off_out_w = offsetof(NNUE::NNUEFloat, output_weights) / sizeof(float);
+		off_out_b = offsetof(NNUE::NNUEFloat, output_bias) / sizeof(float);
+	}
+
+	float train_batch(Adam &optimizer, const std::vector<TrainingData> &batch, float lambda = 0.5f, float scale = 400.0f)
+	{
+		int32_t current_batch_size = batch.size();
+		if (current_batch_size > batch_capacity) return 0.0f;
+
+		float zero = 0.0f;
+		queue.enqueueWriteBuffer(d_loss, CL_TRUE, 0, sizeof(float), &zero);
+		
+		// Prepare quantization arguments
+		int32_t q_arg = 0;
+		quantize_kernel.setArg(q_arg++, optimizer.get_weights());
+		quantize_kernel.setArg(q_arg++, d_q_weights);
+		quantize_kernel.setArg(q_arg++, off_in_w);
+		quantize_kernel.setArg(q_arg++, off_in_b);
+		quantize_kernel.setArg(q_arg++, off_fc1_w);
+		quantize_kernel.setArg(q_arg++, off_fc1_b);
+		quantize_kernel.setArg(q_arg++, off_fc2_w);
+		quantize_kernel.setArg(q_arg++, off_fc2_b);
+		quantize_kernel.setArg(q_arg++, off_out_w);
+		quantize_kernel.setArg(q_arg++, off_out_b);
+		quantize_kernel.setArg(q_arg++, total_params);
+
+		// Launch quantization kernel across all parameters (runs once per batch)
+		cl::NDRange global_q_size(total_params);
+		queue.enqueueNDRangeKernel(quantize_kernel, cl::NullRange, global_q_size, cl::NullRange);
+
+		// Prepare forward/backward arguments
+		queue.enqueueWriteBuffer(d_batch, CL_TRUE, 0, current_batch_size * sizeof(TrainingData), batch.data());
+
+		int32_t arg = 0;
+		train_kernel.setArg(arg++, d_batch);
+		train_kernel.setArg(arg++, optimizer.get_weights());
+		train_kernel.setArg(arg++, d_q_weights);
+		train_kernel.setArg(arg++, optimizer.get_gradients());
+		
+		train_kernel.setArg(arg++, off_in_w);
+		train_kernel.setArg(arg++, off_in_b);
+		train_kernel.setArg(arg++, off_fc1_w);
+		train_kernel.setArg(arg++, off_fc1_b);
+		train_kernel.setArg(arg++, off_fc2_w);
+		train_kernel.setArg(arg++, off_fc2_b);
+		train_kernel.setArg(arg++, off_out_w);
+		train_kernel.setArg(arg++, off_out_b);
+
+		train_kernel.setArg(arg++, current_batch_size);
+		train_kernel.setArg(arg++, lambda);
+		train_kernel.setArg(arg++, scale);
+		train_kernel.setArg(arg++, d_loss);
+
+		// Launch training kernel across the batch size
+		cl::NDRange global_work_size(current_batch_size);
+		queue.enqueueNDRangeKernel(train_kernel, cl::NullRange, global_work_size, cl::NullRange);
+		
+		// Synchronize
+		queue.finish();
+
+		// Return the loss.
+		float total_loss = 0.0f;
+		queue.enqueueReadBuffer(d_loss, CL_TRUE, 0, sizeof(float), &total_loss);
+		return total_loss / (float)current_batch_size;
+
+	}
+};
 
 };
