@@ -138,7 +138,7 @@ inline std::string to_string(Player player)
  */
 enum Square : uint8_t // 7bit. 
 {
-	S91, SBOARD_SQUARES, S71, S61, S51, S41, S31, S21, S11,
+	S91, S81, S71, S61, S51, S41, S31, S21, S11,
 	S92, S82, S72, S62, S52, S42, S32, S22, S12,
 	S93, S83, S73, S63, S53, S43, S33, S23, S13,
 	S94, S84, S74, S64, S54, S44, S34, S24, S14,
