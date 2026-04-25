@@ -37,7 +37,7 @@ int32_t main()
 	auto engine_net = std::make_unique<NNUE::NNUE>();
 	if (NNUE::load_model(*master_net, "master.bin")) abort();
 
-	const int32_t BATCH_SIZE = 1024;
+	const int32_t BATCH_SIZE = 16;
 	const int32_t EPOCHS = 100;
 	const float LEARNING_RATE = 0.001f;
 
@@ -45,25 +45,24 @@ int32_t main()
 	Train::Trainer trainer(context, device, queue, BATCH_SIZE);
 	std::mt19937 rng(1337);
 	
+	std::vector<int32_t> indices(dataset.size());
+	std::iota(indices.begin(), indices.end(), 0);
+	std::vector<Train::TrainingData> current_batch(BATCH_SIZE);
 	for (int32_t epoch = 1; epoch <= EPOCHS; ++epoch) {
 		std::cout << "--- Epoch " << epoch << "/" << EPOCHS << " ---\n";
-
 		float epoch_loss = 0.0f;
-		std::shuffle(dataset.begin(), dataset.end(), rng);
+		std::shuffle(indices.begin(), indices.end(), rng);
 		int32_t batches = dataset.size() / BATCH_SIZE;
-		
 		for (int32_t b = 0; b < batches; ++b) {
-			auto start_it = dataset.begin() + (b * BATCH_SIZE);
-			auto end_it = start_it + BATCH_SIZE;
-			std::vector<Train::TrainingData> batch(start_it, end_it);
-
-			float batch_loss = trainer.train_batch(optimizer, batch, 0.5f, 400.0f);
+			int32_t offset = b * BATCH_SIZE;
+			for (int32_t i = 0; i < BATCH_SIZE; ++i) {
+				current_batch[i] = dataset[indices[offset + i]];
+			}
+			float batch_loss = trainer.train_batch(optimizer, current_batch.data(), BATCH_SIZE, 0.5f, 400.0f);
 			epoch_loss += batch_loss;
 			optimizer.step(LEARNING_RATE);
-
 			printf("\r%d / %d batches", b, batches);
 			fflush(stdout);
-			
 		}
 		printf("\n");
 

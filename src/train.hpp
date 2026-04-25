@@ -23,8 +23,8 @@ namespace Train
  */
 struct TrainingData
 {
-	int32_t features_current[40]; // current player features at this game state. 
-	int32_t features_other[40];   // Other player features at this game state.
+	int32_t features_current[80]; // current player features at this game state. 
+	int32_t features_other[80];   // Other player features at this game state.
 	int32_t num_current;          // Number of current player active features.
 	int32_t num_other;            // Number of other player active features.
 	int32_t score;                // Score of this state. 
@@ -46,35 +46,32 @@ inline void extract_active_features(const Shogi::State &state, Shogi::Player cur
 	data.num_current = 0;
 	data.num_other = 0;
 
-	// Lambda to put the features automatically in the right buffer.
-	auto push_feature = [&](int32_t id_sente, int32_t id_gote)
-	{
-		if (current_player == Shogi::Player::SENTE) {
-			data.features_current[data.num_current++] = id_sente;
-			data.features_other[data.num_other++] = id_gote;
-		} else {
-			data.features_current[data.num_current++] = id_gote;
-			data.features_other[data.num_other++] = id_sente;
-		}
+	// Lambdas indépendantes pour remplir les tableaux sans jamais injecter de -1
+	auto push_sente = [&](int32_t id) {
+		if (current_player == Shogi::Player::SENTE) data.features_current[data.num_current++] = id;
+		else                                        data.features_other[data.num_other++] = id;
+	};
+
+	auto push_gote = [&](int32_t id) {
+		if (current_player == Shogi::Player::GOTE) data.features_current[data.num_current++] = id;
+		else                                       data.features_other[data.num_other++] = id;
 	};
 
 	// Get the board pieces features.
 	const Shogi::Piece *board = state.data();
 	for (int32_t sq = 0; sq < 81; ++sq) {
 		Shogi::Piece p = board[sq];
-		if (p.piece() == Shogi::PieceType::UNKNOWN) continue;	
-		int32_t f_sente = -1;
-		int32_t f_gote = -1;
-
-		// Specific case to get the other player king feature.
-		if (!(p.piece() == Shogi::PieceType::K && p.player() == Shogi::Player::SENTE))
-			f_sente = NNUE::get_board_feature_index(Shogi::Player::SENTE, king_sente, p, sq);
-		if (!(p.piece() == Shogi::PieceType::K && p.player() == Shogi::Player::GOTE))
-			f_gote = NNUE::get_board_feature_index(Shogi::Player::GOTE, king_gote, p, sq);
-
-		// Push the features in the buffers.
-		if (f_sente != -1 || f_gote != -1) push_feature(f_sente, f_gote);
-	
+		if (p.piece() == Shogi::PieceType::UNKNOWN) continue;
+		
+		// On pousse pour Sente seulement si ce n'est pas le roi Sente
+		if (!(p.piece() == Shogi::PieceType::K && p.player() == Shogi::Player::SENTE)) {
+			push_sente(NNUE::get_board_feature_index(Shogi::Player::SENTE, king_sente, p, sq));
+		}
+		
+		// On pousse pour Gote seulement si ce n'est pas le roi Gote
+		if (!(p.piece() == Shogi::PieceType::K && p.player() == Shogi::Player::GOTE)) {
+			push_gote(NNUE::get_board_feature_index(Shogi::Player::GOTE, king_gote, p, sq));
+		}
 	}
 
 	// Get the hand pieces features for each player.
@@ -82,20 +79,17 @@ inline void extract_active_features(const Shogi::State &state, Shogi::Player cur
 		Shogi::Player owner = static_cast<Shogi::Player>(player);
 		const auto &hand = state.hands(owner);
 		
-		// Get the number of each piece in hand.
 		for (int32_t pt = Shogi::PieceType::R; pt <= Shogi::PieceType::P; ++pt) {
 			int32_t count = hand[pt];
 			if (count <= 0) continue;
 			
-			// Get the feature id and push it in the buffers.
 			Shogi::PieceType p_type = static_cast<Shogi::PieceType>(pt);
-			int32_t f_sente = NNUE::get_hand_feature_index(Shogi::Player::SENTE, king_sente, owner, p_type, count);
-			int32_t f_gote  = NNUE::get_hand_feature_index(Shogi::Player::GOTE, king_gote, owner, p_type, count);
-			push_feature(f_sente, f_gote);
 			
+			// Les pièces en main sont toujours des features valides pour les deux joueurs
+			push_sente(NNUE::get_hand_feature_index(Shogi::Player::SENTE, king_sente, owner, p_type, count));
+			push_gote(NNUE::get_hand_feature_index(Shogi::Player::GOTE, king_gote, owner, p_type, count));
 		}
 	}
-
 }
 
 
@@ -317,9 +311,8 @@ public:
 		off_out_b = offsetof(NNUE::NNUEFloat, output_bias) / sizeof(float);
 	}
 
-	float train_batch(Adam &optimizer, const std::vector<TrainingData> &batch, float lambda = 0.5f, float scale = 400.0f)
+	float train_batch(Adam &optimizer, const TrainingData* batch_data, int32_t current_batch_size, float lambda = 0.5f, float scale = 400.0f)
 	{
-		int32_t current_batch_size = batch.size();
 		if (current_batch_size > batch_capacity) return 0.0f;
 
 		float zero = 0.0f;
@@ -344,7 +337,7 @@ public:
 		queue.enqueueNDRangeKernel(quantize_kernel, cl::NullRange, global_q_size, cl::NullRange);
 
 		// Prepare forward/backward arguments
-		queue.enqueueWriteBuffer(d_batch, CL_TRUE, 0, current_batch_size * sizeof(TrainingData), batch.data());
+		queue.enqueueWriteBuffer(d_batch, CL_TRUE, 0, current_batch_size * sizeof(TrainingData), batch_data);
 
 		int32_t arg = 0;
 		train_kernel.setArg(arg++, d_batch);

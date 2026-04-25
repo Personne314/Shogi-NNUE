@@ -6,8 +6,8 @@
  */
 typedef struct
 {
-	int features_current[40];
-	int features_other[40];
+	int features_current[80];
+	int features_other[80];
 	int num_current;
 	int num_other;
 	int score;
@@ -168,7 +168,7 @@ __kernel void forward_backward(
 	int score_int = q_out_b[0];
 	for (int j = 0; j < 32; ++j) score_int += q_out_w[j] * fc2_out[j];
 
-	float score_pred = (float)score_int / (64.0f * 127.0f);
+	float score_pred = (float)score_int / 16.0f;
 	float p_net = sigmoid(score_pred / scale);
 	float p_tree = sigmoid((float)data->score / scale);
 	float target = lambda * data->game_result + (1.0f - lambda) * p_tree;
